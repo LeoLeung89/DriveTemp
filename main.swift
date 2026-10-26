@@ -10,7 +10,13 @@ let axisMax = 90
 let rescanEveryTicks = 4
 let dashboardSize = NSSize(width: 320, height: 674)
 
-let smartctlPath = ("~/.local/bin/smartctl" as NSString).expandingTildeInPath
+let smartctlPath: String = {
+    let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/smartctl").path
+    let candidates = [bundled, ("~/.local/bin/smartctl" as NSString).expandingTildeInPath,
+                      "/opt/homebrew/bin/smartctl", "/usr/local/bin/smartctl"]
+        + (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map { "\($0)/smartctl" }
+    return candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? candidates[1]
+}()
 let csvPath = ("~/Library/Logs/tb-monitor.csv" as NSString).expandingTildeInPath
 let alertPath = ("~/Library/Logs/tb-alerts.log" as NSString).expandingTildeInPath
 

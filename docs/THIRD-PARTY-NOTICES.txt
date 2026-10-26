@@ -1,0 +1,25 @@
+DriveTemp is licensed under MIT. The bundled smartctl is a separate executable
+from smartmontools 7.5, Copyright (C) its respective contributors, distributed
+under GNU GPL version 2 or later. See smartmontools-COPYING.txt and the full
+unmodified source archive supplied alongside this notice inside the app bundle.
+
+Official source:
+https://github.com/smartmontools/smartmontools/releases/tag/RELEASE_7_5
+smartmontools-7.5.tar.gz SHA-256:
+690b83ca331378da9ea0d9d61008c4b22dde391387b9bbad7f29387f2595f76e
+
+The executable was built from this source, without source changes, on Apple
+Silicon using Apple's command line C/C++ toolchain and the following commands:
+
+tar -xzf smartmontools-7.5.tar.gz
+cd smartmontools-7.5
+MACOSX_DEPLOYMENT_TARGET=13.0 CFLAGS='-O2 -mmacosx-version-min=13.0' CXXFLAGS='-O2 -mmacosx-version-min=13.0' LDFLAGS='-mmacosx-version-min=13.0' ./configure
+make -j4 smartctl
+
+Only Apple's system libraries are linked. No smartd service, updater, privileged
+helper, or launch daemon is installed. DriveTemp invokes smartctl as a child
+process to query SMART data. The source and GPL allow modification of smartctl;
+to use a rebuilt version, replace Contents/Helpers/smartctl in the app bundle.
+After replacement, local ad-hoc signatures may be regenerated with:
+codesign --force --sign - '硬盘盒温度.app/Contents/Helpers/smartctl'
+codesign --force --sign - '硬盘盒温度.app'

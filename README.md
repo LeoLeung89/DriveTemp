@@ -4,6 +4,14 @@ macOS 菜单栏外接硬盘温度、读写速度监控，原生 Swift 编写，�
 
 <img src="docs/screenshot.png" width="320" alt="截图">
 
+## 下载与安装
+
+[下载 Mac 安装包 v2.1.2](https://github.com/LeoLeung89/DriveTemp/releases/download/v2.1.2/DriveTemp-Mac-arm64-v2.1.2.zip)
+
+适用于 Apple 芯片 Mac（M 系列），最低 macOS 13。解压后将「硬盘盒温度.app」拖入「应用程序」并打开。安装包内已包含 smartctl，无需 Homebrew、Xcode 或自行编译。
+
+应用采用本地临时签名，未通过 Apple 开发者身份签名和公证；若首次打开被系统阻止，请核对下载来源后按「系统设置 > 隐私与安全性」中的提示允许打开。温度能否获取仍取决于设备对 SMART 的支持。
+
 ## 它解决什么问题
 
 Mac 上看不到外接硬盘的温度。iStat Menus、Stats 这类工具只读 Apple 自家传感器，外接盘的温度藏在盘自己的 SMART 日志里，它们读不到。
@@ -25,13 +33,13 @@ Mac 上看不到外接硬盘的温度。iStat Menus、Stats 这类工具只读 A
 ## 依赖
 
 - macOS 13 或更高
-- `smartctl`（smartmontools）
+- `smartctl`（smartmontools；发布的安装包已经内置，以下仅适用于自行构建）
 
 ```bash
 brew install smartmontools
 ```
 
-脚本默认找 `~/.local/bin/smartctl`，找不到时回落到 PATH。如果装在别处，改 `main.swift` 顶部的 `smartctlPath`。
+程序优先使用应用包内的 smartctl，其次查找 `~/.local/bin/smartctl`、Homebrew 常见安装路径及 PATH。
 
 ## 构建
 
@@ -39,6 +47,12 @@ brew install smartmontools
 xcode-select --install      # 需要 swiftc
 ./build.sh                  # 只编译到 build/
 ./build.sh install          # 编译并安装到 ~/Applications
+```
+
+构建脚本面向 arm64/macOS 13。打包时，先按 [第三方构建说明](docs/THIRD-PARTY-NOTICES.txt) 构建 smartctl，再执行：
+
+```bash
+SMARTCTL_BINARY=/path/to/smartctl SMARTMONTOOLS_SOURCE=/path/to/smartmontools-7.5.tar.gz bash package.sh
 ```
 
 装好后到 系统设置 > 通用 > 登录项 添加这个 app，就能开机自启。
@@ -63,6 +77,7 @@ defaults write com.leo.tbtemp threshold 70
 
 ## 版本
 
+- **2.1.2**：提供可直接使用的 Apple 芯片 Mac 应用包，内置 smartctl 及其完整源码和许可证；修正构建目标为 macOS 13，补齐依赖路径查找。
 - **2.1.1（2026-10-26）**：增加每秒读写速度、自定义名称和设备信息；改为点击外部即收起的菜单栏弹出面板，温度查询移至后台；温度标注改为设备报告的传感器编号，明确区分 SSD 与硬盘盒温度。
 - **2.0**：原始温度监控、曲线、日志与告警版本。
 
@@ -99,3 +114,5 @@ Read NVMe SMART/Health Information failed: GetLogPage failed: code=706
 ## 许可
 
 MIT
+
+随安装包附带的独立程序 smartctl 来自 smartmontools 7.5，使用 GPL-2.0-or-later 许可证；完整官方源码、许可证和构建说明均位于应用内的 `Contents/Resources/ThirdParty/`，详见 [第三方说明](docs/THIRD-PARTY-NOTICES.txt)。

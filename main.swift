@@ -8,6 +8,7 @@ let chartWindowPoints = 180
 let axisMin = 20
 let axisMax = 90
 let rescanEveryTicks = 4
+let dashboardSize = NSSize(width: 320, height: 674)
 
 let smartctlPath = ("~/.local/bin/smartctl" as NSString).expandingTildeInPath
 let csvPath = ("~/Library/Logs/tb-monitor.csv" as NSString).expandingTildeInPath
@@ -28,6 +29,9 @@ struct Drive {
     var serial: String
     var isTB: Bool
     var hasTemp: Bool
+    var bridgeInfo: String = "系统未提供"
+
+    var displayName: String { DriveNames().name(for: key, fallback: shortName) }
 
     var shortName: String {
         let tokens = model.split(separator: " ").map(String.init)
@@ -124,7 +128,8 @@ func scanDrives() -> [Drive] {
 
         let key = serial.isEmpty ? dev : serial
         list.append(Drive(key: key, device: dev, devType: "auto",
-                          model: model, serial: serial, isTB: !isUSB, hasTemp: hasTemp))
+                          model: model, serial: serial, isTB: !isUSB, hasTemp: hasTemp,
+                          bridgeInfo: readEnclosureIdentity(dev)))
     }
     return list
 }
@@ -157,7 +162,7 @@ func appendCSV(_ d: Drive, _ r: Readings) {
     if let h = FileHandle(forWritingAtPath: csvPath) {
         h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); h.closeFile()
     } else {
-        try? ("时间,复合,主控,闪存,告警,链路,设备\n" + line).write(toFile: csvPath, atomically: true, encoding: .utf8)
+        try? ("时间,综合温度,传感器1,传感器2,告警,链路,设备\n" + line).write(toFile: csvPath, atomically: true, encoding: .utf8)
     }
 }
 
@@ -232,6 +237,8 @@ final class DashboardView: NSView {
     var selected = 0
     var rows: [Row] = []
     var latest = Readings()
+    var ioRate: DiskIORate?
+    var ioHint = "采样中"
     var stats = Stats()
     var connected: String = "--"
     var interfaceText: String = "--"
@@ -240,6 +247,11 @@ final class DashboardView: NSView {
     private var hitAreas: [(NSRect, String)] = []
 
     override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { true }
+
+    override func cancelOperation(_ sender: Any?) {
+        owner?.closePanel()
+    }
 
     private func card(_ r: NSRect) {
         let p = NSBezierPath(roundedRect: r, xRadius: 12, yRadius: 12)
@@ -371,24 +383,28 @@ final class DashboardView: NSView {
         if drives.isEmpty {
             chip(NSRect(x: pad, y: pickerY, width: inner, height: pickerH), "未检测到外接硬盘", "none", false)
         } else if drives.count == 1 {
-            chip(NSRect(x: pad, y: pickerY, width: inner, height: pickerH), drives[0].shortName, "select0", true)
+            chip(NSRect(x: pad, y: pickerY, width: inner, height: pickerH), drives[0].displayName, "select0", true)
         } else {
             let n = min(drives.count, 3)
             let cw = (inner - gap * CGFloat(n - 1)) / CGFloat(n)
             for i in 0..<n {
                 chip(NSRect(x: pad + CGFloat(i) * (cw + gap), y: pickerY, width: cw, height: pickerH),
-                     drives[i].shortName, "select\(i)", i == selected)
+                     drives[i].displayName, "select\(i)", i == selected)
             }
         }
 
-        let top = pickerY + pickerH + gap
+        if selected < drives.count {
+            text("SSD：\(drives[selected].model)", NSRect(x: pad + 2, y: pickerY + 35, width: inner - 68, height: 20), 10.5, textDim)
+            chip(NSRect(x: pad + inner - 60, y: pickerY + 32, width: 60, height: 22), "命名", "rename", false)
+        }
+        let top = pickerY + pickerH + gap + 26
 
         let h1: CGFloat = 250
         let aRect = NSRect(x: pad, y: top, width: inner, height: h1)
         card(aRect)
         let ar = aRect.insetBy(dx: 13, dy: 11)
         dot(CGPoint(x: ar.minX, y: ar.minY + 5), accentOrange, 8)
-        text("硬盘温度", NSRect(x: ar.minX + 17, y: ar.minY, width: ar.width - 17, height: 22), 13.5, textMain, .semibold)
+        text("SSD 温度", NSRect(x: ar.minX + 17, y: ar.minY, width: ar.width - 17, height: 22), 13.5, textMain, .semibold)
 
         let s1v = latest.s1 ?? 0
         let stColor: NSColor = latest.s1 == nil ? textDim : (s1v >= th ? accentRed : (s1v >= th - 10 ? accentOrange : accentGreen))
@@ -398,35 +414,39 @@ final class DashboardView: NSView {
         let big = latest.s1.map { "\($0)" } ?? "--"
         text(big, NSRect(x: ar.minX, y: ar.minY + 20, width: 110, height: 48), 38, textMain, .semibold)
         text("℃", NSRect(x: ar.minX + 58, y: ar.minY + 38, width: 24, height: 24), 16, textDim, .medium)
+        text("SSD 传感器 1", NSRect(x: ar.minX + 116, y: ar.minY + 30, width: ar.width - 116, height: 20), 11, textDim)
+        text("非硬盘盒温度", NSRect(x: ar.minX + 116, y: ar.minY + 47, width: ar.width - 116, height: 18), 10, textDim)
 
         let chartRect = NSRect(x: ar.minX, y: ar.minY + 86, width: ar.width, height: aRect.height - 109)
         lineChart(chartRect)
 
-        let legend: [(String, NSColor)] = [("主控", accentOrange), ("闪存", accentGreen)]
+        let legend: [(String, NSColor)] = [("传感器 1", accentOrange), ("传感器 2", accentGreen)]
         var lx = ar.minX
         for (label, color) in legend {
             dot(CGPoint(x: lx, y: ar.minY + 74), color, 8)
-            text(label, NSRect(x: lx + 13, y: ar.minY + 69, width: 40, height: 16), 11, textDim)
-            lx += 52
+            text(label, NSRect(x: lx + 13, y: ar.minY + 69, width: 62, height: 16), 11, textDim)
+            lx += 80
         }
         text("阈值 \(th)℃", NSRect(x: ar.minX, y: ar.minY + 69, width: ar.width, height: 16), 11, textDim, .regular, .right)
 
-        let h2: CGFloat = 180
+        let h2: CGFloat = 232
         let bRect = NSRect(x: pad, y: top + h1 + gap, width: inner, height: h2)
         card(bRect)
         let br = bRect.insetBy(dx: 13, dy: 11)
         dot(CGPoint(x: br.minX, y: br.minY + 5), accentTeal, 8)
-        text("读数与连接", NSRect(x: br.minX + 17, y: br.minY, width: br.width - 17, height: 22), 13.5, textMain, .semibold)
+        text("读写与连接", NSRect(x: br.minX + 17, y: br.minY, width: br.width - 17, height: 22), 13.5, textMain, .semibold)
 
         let s1t = latest.s1.map { "\($0)℃" } ?? "--"
         let s2t = latest.s2.map { "\($0)℃" } ?? "--"
-        rowItem(NSRect(x: br.minX, y: br.minY + 32, width: br.width, height: 20), "主控", s1t, accentOrange)
-        rowItem(NSRect(x: br.minX, y: br.minY + 58, width: br.width, height: 20), "闪存", s2t, accentGreen)
-        rowItem(NSRect(x: br.minX, y: br.minY + 84, width: br.width, height: 20), "连接时间", connected, nil)
-        rowItem(NSRect(x: br.minX, y: br.minY + 110, width: br.width, height: 20), "接口", interfaceText,
+        rowItem(NSRect(x: br.minX, y: br.minY + 32, width: br.width, height: 20), "读取 · 每秒", ioRate.map { formatIORate($0.read) } ?? ioHint, accentTeal)
+        rowItem(NSRect(x: br.minX, y: br.minY + 58, width: br.width, height: 20), "写入 · 每秒", ioRate.map { formatIORate($0.write) } ?? ioHint, accentGreen)
+        rowItem(NSRect(x: br.minX, y: br.minY + 84, width: br.width, height: 20), "SSD 传感器 1", s1t, accentOrange)
+        rowItem(NSRect(x: br.minX, y: br.minY + 110, width: br.width, height: 20), "SSD 传感器 2", s2t, accentGreen)
+        rowItem(NSRect(x: br.minX, y: br.minY + 136, width: br.width, height: 20), "连接时间", connected, nil)
+        rowItem(NSRect(x: br.minX, y: br.minY + 162, width: br.width, height: 20), "接口", interfaceText,
                 interfaceText.contains("雷雳") ? accentGreen : nil)
         let warnText = latest.warn == "0x00" ? "正常" : (latest.warn == "NA" ? "—" : latest.warn)
-        rowItem(NSRect(x: br.minX, y: br.minY + 136, width: br.width, height: 20), "告警",
+        rowItem(NSRect(x: br.minX, y: br.minY + 188, width: br.width, height: 20), "告警",
                 warnText, latest.warn == "0x00" || latest.warn == "NA" ? nil : accentRed)
 
         let btnH: CGFloat = 36
@@ -455,9 +475,17 @@ final class DashboardView: NSView {
 
 // MARK: - 应用
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     var item: NSStatusItem!
     var timer: Timer?
+    var ioTimer: Timer?
+    private let temperatureQueue = DispatchQueue(label: "com.leo.tbtemp.temperature", qos: .utility)
+    private let ioQueue = DispatchQueue(label: "com.leo.tbtemp.disk-io", qos: .utility)
+    private let ioSampler = DiskIOSampler()
+    private var refreshing = false
+    private var samplingIO = false
+    private var ioRates: [String: DiskIORate] = [:]
+    private var ioDevices: Set<String> = []
     var tick = 0
     var drives: [Drive] = []
     var readings: [String: Readings] = [:]
@@ -465,7 +493,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var stats = Stats()
     var lastAlert: [String: Date] = [:]
     var since: [String: Double] = [:]
-    var panel: NSWindow?
+    var panel: NSPopover?
     var dashboard: DashboardView?
 
     var primaryKey: String? { drives.first?.key }
@@ -477,12 +505,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.action = #selector(togglePanel)
         item.button?.sendAction(on: [.leftMouseUp])
 
-        drives = scanDrives()
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: sampleInterval, repeats: true) { _ in
             self.refresh()
         }
         RunLoop.current.add(timer!, forMode: .common)
+        ioTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            self?.refreshIO()
+        }
+        ioTimer?.tolerance = 0.1
+        RunLoop.current.add(ioTimer!, forMode: .common)
 
         if CommandLine.arguments.contains("--panel") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.showPanel() }
@@ -490,30 +522,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func refresh() {
+        guard !refreshing else { return }
+        refreshing = true
         tick += 1
-        if tick % rescanEveryTicks == 0 {
-            let found = scanDrives()
-            if found.map({ $0.key }) != drives.map({ $0.key }) {
-                drives = found
-                selected = min(selected, max(drives.count - 1, 0))
+        let currentTick = tick
+        let currentDrives = drives
+        temperatureQueue.async {
+            let found = currentTick == 1 || currentTick % rescanEveryTicks == 0 ? scanDrives() : currentDrives
+            var fresh: [String: Readings] = [:]
+            for d in found {
+                let r = readDrive(d)
+                fresh[d.key] = r
+                if currentTick % csvEveryN == 1 { appendCSV(d, r) }
+            }
+            DispatchQueue.main.async {
+                let selectedKey = self.selected < self.drives.count ? self.drives[self.selected].key : nil
+                self.drives = found
+                self.selected = found.firstIndex { $0.key == selectedKey } ?? 0
+                self.readings = fresh
+                for d in found { self.checkAlert(d, fresh[d.key] ?? Readings()) }
+                self.updateConnectionState(Array(fresh.keys))
+                if self.selected < found.count {
+                    self.stats = todayStats(found[self.selected].key, self.primaryKey)
+                }
+                self.refreshing = false
+                self.renderTitle()
+                self.refreshPanel()
+                self.refreshIO()
             }
         }
-        if tick == 1 && drives.isEmpty { drives = scanDrives() }
+    }
 
-        var fresh: [String: Readings] = [:]
-        for d in drives {
-            let r = readDrive(d)
-            fresh[d.key] = r
-            if tick % csvEveryN == 1 { appendCSV(d, r) }
-            checkAlert(d, r)
+    func refreshIO() {
+        guard !samplingIO else { return }
+        samplingIO = true
+        let devices = Set(drives.map { $0.device })
+        ioQueue.async {
+            let counters = readDiskIOCounters(devices: devices)
+            let rates = self.ioSampler.sample(counters, at: ProcessInfo.processInfo.systemUptime)
+            DispatchQueue.main.async {
+                self.ioRates = rates
+                self.ioDevices = Set(counters.keys)
+                self.samplingIO = false
+                self.refreshIORows()
+            }
         }
-        readings = fresh
-        updateConnectionState(Array(fresh.keys))
+    }
+
+    func refreshIORows() {
+        guard let v = dashboard else { return }
         if selected < drives.count {
-            stats = todayStats(drives[selected].key, primaryKey)
+            let device = drives[selected].device
+            v.ioRate = ioRates[device]
+            v.ioHint = ioDevices.contains(device) ? "采样中" : "不可用"
+        } else {
+            v.ioRate = nil
+            v.ioHint = "—"
         }
-        renderTitle()
-        refreshPanel()
+        v.needsDisplay = true
     }
 
     func renderTitle() {
@@ -541,52 +607,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func togglePanel() {
-        if let w = panel, w.isVisible { w.orderOut(nil); return }
+        if panel?.isShown == true { closePanel(); return }
         showPanel()
-        DispatchQueue.global().async {
-            let found = scanDrives()
-            DispatchQueue.main.async {
-                if found.map({ $0.key }) != self.drives.map({ $0.key }) {
-                    self.drives = found
-                    self.selected = min(self.selected, max(self.drives.count - 1, 0))
-                }
-                self.refresh()
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { self.refresh() }
     }
 
     @objc func showPanel() {
+        guard let button = item.button, button.window != nil else { return }
         if panel == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 596),
-                             styleMask: [.titled, .closable, .miniaturizable],
-                             backing: .buffered, defer: false)
-            w.title = "硬盘温度"
-            w.appearance = NSAppearance(named: .darkAqua)
-            w.isReleasedWhenClosed = false
-            w.titlebarAppearsTransparent = true
-            w.backgroundColor = hex(15, 17, 21)
-            w.center()
-            let v = DashboardView(frame: w.contentView!.bounds)
+            let popover = NSPopover()
+            popover.behavior = .transient
+            popover.animates = true
+            popover.delegate = self
+            popover.appearance = NSAppearance(named: .darkAqua)
+            popover.contentSize = dashboardSize
+            let controller = NSViewController()
+            let v = DashboardView(frame: NSRect(origin: .zero, size: dashboardSize))
             v.autoresizingMask = [.width, .height]
             v.owner = self
-            w.contentView?.addSubview(v)
-            panel = w
+            controller.view = v
+            popover.contentViewController = controller
+            panel = popover
             dashboard = v
         }
-        NSApp.activate(ignoringOtherApps: true)
-        if let w = panel, let b = item.button, let bw = b.window {
-            let anchor = bw.convertToScreen(b.convert(b.bounds, to: nil))
-            let vf = (bw.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-            var f = w.frame
-            f.origin.x = min(max(anchor.midX - f.width / 2, vf.minX + 8), vf.maxX - f.width - 8)
-            f.origin.y = anchor.minY - f.height - 6
-            if f.origin.y < vf.minY + 8 { f.origin.y = vf.minY + 8 }
-            w.setFrame(f, display: false)
-        }
-        panel?.makeKeyAndOrderFront(nil)
         refreshPanel()
+        NSApp.activate(ignoringOtherApps: true)
+        panel?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        dashboard?.window?.makeKey()
+        dashboard?.window?.makeFirstResponder(dashboard)
     }
+
+    func closePanel() { panel?.performClose(nil) }
+
+    func popoverShouldDetach(_ popover: NSPopover) -> Bool { false }
+
+    func popoverDidClose(_ notification: Notification) { restoreDashboard() }
+
+    func restoreDashboard() {
+        if let dashboard = dashboard { panel?.contentViewController?.view = dashboard }
+        refreshPanel()
+        dashboard?.window?.makeFirstResponder(dashboard)
+    }
+
+    func renameDrive() {
+        guard selected < drives.count else { return }
+        let drive = drives[selected]
+        let editor = DriveNameEditor(size: dashboardSize, name: drive.displayName, model: drive.model, bridge: drive.bridgeInfo)
+        editor.onSave = { [weak self] name in
+            DriveNames().save(name, for: drive.key)
+            self?.restoreDashboard()
+        }
+        editor.onCancel = { [weak self] in self?.restoreDashboard() }
+        panel?.contentViewController?.view = editor
+        editor.window?.makeFirstResponder(editor.field)
+        editor.field.selectText(nil)
+    }
+
+    func applicationDidResignActive(_ notification: Notification) { closePanel() }
 
     func refreshPanel() {
         guard let v = dashboard else { return }
@@ -618,6 +694,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             v.connected = "未连接"
             v.interfaceText = "无设备"
         }
+        refreshIORows()
         v.needsDisplay = true
     }
 
@@ -629,6 +706,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         switch key {
+        case "rename": renameDrive()
         case "csv": openCSV()
         case "alert": openAlerts()
         case "report": makeReport()
@@ -645,10 +723,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard s1 >= th || badWarn else { return }
         if let last = lastAlert[d.key], Date().timeIntervalSince(last) < 1800 { return }
         lastAlert[d.key] = Date()
-        var msg = "\(d.shortName) 主控 \(s1)℃"
+        var msg = "\(d.displayName) SSD 传感器 1：\(s1)℃"
         if badWarn { msg += "，告警 \(r.warn)" }
         notifyUser(msg)
-        let log = "\(stamp())  \(d.model) 主控=\(s1) \(badWarn ? "Critical Warning = \(r.warn)" : "超过阈值 \(th)℃")\n"
+        let log = "\(stamp())  \(d.model) 传感器1=\(s1) \(badWarn ? "Critical Warning = \(r.warn)" : "超过阈值 \(th)℃")\n"
         if let h = FileHandle(forWritingAtPath: alertPath) {
             h.seekToEndOfFile(); h.write(log.data(using: .utf8)!); h.closeFile()
         } else {
@@ -736,9 +814,9 @@ func buildReportHTML(_ d: Drive, _ rows: [Row]) -> String {
     <h1>\(d.model)</h1>
     <div class="sub">序列号 \(d.serial)　接口 \(d.isTB ? "雷雳 / USB4" : "USB")　采样 \(n) 点　生成于 \(stamp())</div>
     <div class="cards">
-      <div class="card"><span>最高主控</span><b>\(mx)℃</b></div>
-      <div class="card"><span>最低主控</span><b>\(mn)℃</b></div>
-      <div class="card"><span>平均主控</span><b>\(avg)℃</b></div>
+      <div class="card"><span>传感器 1 最高</span><b>\(mx)℃</b></div>
+      <div class="card"><span>传感器 1 最低</span><b>\(mn)℃</b></div>
+      <div class="card"><span>传感器 1 平均</span><b>\(avg)℃</b></div>
       <div class="card"><span>超阈值次数</span><b>\(temps.filter { $0 >= threshold() }.count)</b></div>
     </div>
     <svg viewBox="0 0 \(w) \(h)" width="100%" style="max-width:\(w)px;background:#141821;border-radius:10px">
@@ -749,7 +827,7 @@ func buildReportHTML(_ d: Drive, _ rows: [Row]) -> String {
       <polyline points="\(poly { $0.s1 })" fill="none" stroke="#ff9f43" stroke-width="2.2"/>
       \(ticks)
     </svg>
-    <p style="color:#8b93a1;font-size:12px">橙线主控，绿线闪存。数据源 \(csvPath)</p>
+    <p style="color:#8b93a1;font-size:12px">橙线 SSD 传感器 1，绿线 SSD 传感器 2。芯片位置与型号未披露，不代表硬盘盒温度。数据源 \(csvPath)</p>
     </body></html>
     """
 }
@@ -757,7 +835,7 @@ func buildReportHTML(_ d: Drive, _ rows: [Row]) -> String {
 // MARK: - 离屏渲染
 
 if CommandLine.arguments.contains("--render") {
-    let v = DashboardView(frame: NSRect(x: 0, y: 0, width: 320, height: 596))
+    let v = DashboardView(frame: NSRect(origin: .zero, size: dashboardSize))
     v.appearance = NSAppearance(named: .darkAqua)
     let ds = scanDrives()
     v.drives = ds
@@ -767,6 +845,12 @@ if CommandLine.arguments.contains("--render") {
         let d = ds[idx]
         v.rows = loadRows(d.key, ds.first?.key, chartWindowPoints)
         v.latest = readDrive(d)
+        let devices: Set<String> = [d.device]
+        let sampler = DiskIOSampler()
+        _ = sampler.sample(readDiskIOCounters(devices: devices), at: ProcessInfo.processInfo.systemUptime)
+        Thread.sleep(forTimeInterval: 1)
+        v.ioRate = sampler.sample(readDiskIOCounters(devices: devices), at: ProcessInfo.processInfo.systemUptime)[d.device]
+        v.ioHint = "不可用"
         v.stats = todayStats(d.key, ds.first?.key)
         let state = UserDefaults(suiteName: "com.leo.tbtemp")?.dictionary(forKey: "connectedSince") as? [String: Double] ?? [:]
         if let ts = state[d.key] {

@@ -1,6 +1,6 @@
 # DriveTemp
 
-macOS 菜单栏外接硬盘温度监控，原生 Swift 编写，无第三方运行时依赖。
+macOS 菜单栏外接硬盘温度、读写速度监控，原生 Swift 编写，无第三方运行时依赖。
 
 <img src="docs/screenshot.png" width="320" alt="截图">
 

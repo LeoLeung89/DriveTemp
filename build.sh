@@ -53,7 +53,10 @@ echo "==> 完成：$APP"
 if [ "$1" = "install" ]; then
   DEST="$HOME/Applications/$APP_NAME.app"
   mkdir -p "$HOME/Applications"
-  rm -rf "$DEST"
+  if [ -e "$DEST" ]; then
+    echo "已存在已安装版本：$DEST。请先备份并手动处理，避免覆盖现有应用。" >&2
+    exit 1
+  fi
   cp -R "$APP" "$DEST"
   echo "==> 已安装：$DEST"
   open "$DEST"

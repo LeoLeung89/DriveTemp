@@ -8,6 +8,8 @@ macOS 菜单栏外接硬盘温度、读写速度监控，原生 Swift 编写，�
 
 ## 下载与安装
 
+**[下载新图标版 macOS 安装包](https://github.com/LeoLeung89/DriveTemp/releases/download/v2.1.2/drive-macos-icon.zip)**（Apple 芯片；临时签名。覆盖旧版后，相关系统权限可能需要重新授权；建议先备份旧版。）
+
 [下载 Mac 安装包 v2.1.2](https://github.com/LeoLeung89/DriveTemp/releases/download/v2.1.2/DriveTemp-Mac-arm64-v2.1.2.zip)
 
 适用于 Apple 芯片 Mac（M 系列），最低 macOS 13。解压后将「硬盘盒温度.app」拖入「应用程序」并打开。安装包内已包含 smartctl，无需 Homebrew、Xcode 或自行编译。
